@@ -5,5 +5,6 @@ gem 'pg'
 gem 'puma'
 gem 'rackup'
 gem 'rake'
+gem 'rubocop', require: false
 gem 'sinatra'
 gem 'sinatra-activerecord'
