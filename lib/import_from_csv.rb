@@ -1,87 +1,88 @@
-require 'bundler/setup'
-require 'active_record'
+require 'pg'
 require 'csv'
-require 'yaml'
-require 'erb'
-require_relative '../app/models/patient'
-require_relative '../app/models/doctor'
-require_relative '../app/models/test'
-require_relative '../app/models/exam'
 
-db_config = YAML.safe_load(ERB.new(File.read(File.expand_path('../config/database.yml', __dir__))).result)
-ActiveRecord::Base.establish_connection(db_config['development'])
+db_connection = PG.connect(
+  host: 'db',
+  user: 'postgres',
+  password: 'password',
+  dbname: 'rebase_labs'
+)
 
-unless ActiveRecord::Base.connection.table_exists?(:patients)
-  ActiveRecord::Base.connection.create_table :patients do |t|
-    t.string :cpf
-    t.string :name
-    t.string :email
-    t.date :birth_date
-    t.string :street_address
-    t.string :city
-    t.string :state
-    t.timestamps
-  end
-end
+db_connection.exec("
+  CREATE TABLE IF NOT EXISTS patients (
+    cpf VARCHAR(11) PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    email VARCHAR NOT NULL,
+    birth_date DATE NOT NULL,
+    street_address VARCHAR NOT NULL,
+    city VARCHAR NOT NULL,
+    state VARCHAR NOT NULL
+  )
+")
 
-unless ActiveRecord::Base.connection.table_exists?(:doctors)
-  ActiveRecord::Base.connection.create_table :doctors do |t|
-    t.string :license_number
-    t.string :license_state
-    t.string :name
-    t.string :email
-    t.timestamps
-  end
-end
+db_connection.exec("
+  CREATE TABLE IF NOT EXISTS doctors (
+    license_number VARCHAR(10) PRIMARY KEY,
+    license_state VARCHAR(2) NOT NULL,
+    name VARCHAR NOT NULL,
+    email VARCHAR NOT NULL
+  )
+")
 
-unless ActiveRecord::Base.connection.table_exists?(:tests)
-  ActiveRecord::Base.connection.create_table :tests do |t|
-    t.references :patient, foreign_key: true
-    t.references :doctor, foreign_key: true
-    t.string :exam_result_token
-    t.date :exam_date
-    t.timestamps
-  end
-end
+db_connection.exec("
+  CREATE TABLE IF NOT EXISTS tests (
+    id SERIAL PRIMARY KEY,
+    patient_cpf VARCHAR(11) REFERENCES patients(cpf),
+    doctor_license_number VARCHAR(10) REFERENCES doctors(license_number),
+    exam_result_token VARCHAR(20),
+    exam_date DATE NOT NULL
+  )
+")
 
-unless ActiveRecord::Base.connection.table_exists?(:exams)
-  ActiveRecord::Base.connection.create_table :exams do |t|
-    t.references :test, foreign_key: true
-    t.string :exam_type
-    t.string :exam_type_limits
-    t.string :exam_type_result
-    t.timestamps
-  end
-end
+db_connection.exec("
+  CREATE TABLE IF NOT EXISTS exams (
+    id SERIAL PRIMARY KEY,
+    test_id INTEGER REFERENCES tests(id),
+    exam_type VARCHAR NOT NULL,
+    exam_type_limits VARCHAR NOT NULL,
+    exam_type_result VARCHAR NOT NULL
+  )
+")
 
 csv_file_path = File.expand_path('../data/data.csv', __dir__)
 
 CSV.foreach(csv_file_path, col_sep: ';', headers: true) do |row|
-  patient = Patient.find_or_create_by(cpf: row['cpf']) do |p|
-    p.name = row['nome paciente']
-    p.email = row['email paciente']
-    p.birth_date = row['data nascimento paciente']
-    p.street_address = row['endereço/rua paciente']
-    p.city = row['cidade paciente']
-    p.state = row['estado paciente']
-  end
+  cpf = row['cpf'].gsub(/[\.\-]/, '')
+  state = row['estado paciente'].nil? || row['estado paciente'].strip.empty? ? 'N/A' : row['estado paciente']
 
-  doctor = Doctor.find_or_create_by(license_number: row['crm médico'], license_state: row['crm médico estado']) do |d|
-    d.name = row['nome médico']
-    d.email = row['email médico']
-  end
-
-  test = Test.create(
-    patient: patient,
-    doctor: doctor,
-    exam_result_token: row['token resultado exame'],
-    exam_date: row['data exame']
+  db_connection.exec_params(
+    "INSERT INTO patients (cpf, name, email, birth_date, street_address, city, state) 
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (cpf) DO NOTHING",
+    [cpf, row['nome paciente'], row['email paciente'], row['data nascimento paciente'], row['endereço/rua paciente'], row['cidade paciente'], state]
   )
 
-  Exam.create(
-    test: test,
-    exam_type: row['tipo exame'],
-    exam_type_limits: row['limites tipo exame'],
-    exam_type_result: row['resultado tipo exame']
+  db_connection.exec_params(
+    "INSERT INTO doctors (license_number, license_state, name, email)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (license_number) DO NOTHING",
+    [row['crm médico'], row['crm médico estado'], row['nome médico'], row['email médico']]
   )
+
+  db_connection.exec_params(
+    "INSERT INTO tests (patient_cpf, doctor_license_number, exam_result_token, exam_date)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id",
+    [cpf, row['crm médico'], row['token resultado exame'], row['data exame']]
+  ) do |result|
+    test_id = result[0]['id']
+
+    db_connection.exec_params(
+      "INSERT INTO exams (test_id, exam_type, exam_type_limits, exam_type_result)
+       VALUES ($1, $2, $3, $4)",
+      [test_id, row['tipo exame'], row['limites tipo exame'], row['resultado tipo exame']]
+    )
+  end
 end
+
+db_connection.close
