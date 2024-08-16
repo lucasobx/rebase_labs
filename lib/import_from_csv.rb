@@ -1,12 +1,17 @@
 require 'pg'
 require 'csv'
 
+environment = ENV['RACK_ENV'] || 'development'
+db_name = environment == 'test' ? 'rebase_labs_test' : 'rebase_labs'
+
 db_connection = PG.connect(
   host: 'db',
   user: 'postgres',
   password: 'password',
-  dbname: 'rebase_labs'
+  dbname: db_name
 )
+
+db_connection.exec("SET client_min_messages TO WARNING;")
 
 db_connection.exec("
   CREATE TABLE IF NOT EXISTS patients (

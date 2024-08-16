@@ -17,28 +17,37 @@ class TestService
       JOIN doctors ON tests.doctor_license_number = doctors.license_number
     ")
 
-    tests = results.map do |row|
-      {
-        result_token: row['exam_result_token'],
-        result_date: row['exam_date'],
-        patient: {
-          cpf: row['cpf'],
-          name: row['name'],
-          email: row['email'],
-          birth_date: row['birth_date']
-        },
-        doctor: {
-          crm: row['license_number'],
-          crm_state: row['license_state'],
-          name: row['doctor_name'],
-          email: row['doctor_email']
-        },
-        exams: fetch_exams_for_test(db_connection, row['test_id'])
-      }
+    tests = {}
+
+    results.each do |row|
+      test_id = row['test_id']
+      result_token = row['exam_result_token']
+
+      if tests.key?(result_token)
+        tests[result_token][:exams].concat(fetch_exams_for_test(db_connection, test_id))
+      else
+        tests[result_token] = {
+          result_token: result_token,
+          result_date: row['exam_date'],
+          patient: {
+            cpf: row['cpf'],
+            name: row['name'],
+            email: row['email'],
+            birth_date: row['birth_date']
+          },
+          doctor: {
+            crm: row['license_number'],
+            crm_state: row['license_state'],
+            name: row['doctor_name'],
+            email: row['doctor_email']
+          },
+          exams: fetch_exams_for_test(db_connection, test_id)
+        }
+      end
     end
 
     db_connection.close
-    tests
+    tests.values
   end
 
   def self.fetch_exams_for_test(db_connection, test_id)
@@ -52,4 +61,3 @@ class TestService
     end
   end
 end
-
